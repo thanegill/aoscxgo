@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 )
 
 type Client struct {
@@ -64,8 +66,12 @@ func (c *Client) Logout() error {
 
 // login performs POST to create a cookie for authentication to the given IP with the provided credentials.
 func login(http_transport *http.Transport, ip string, rest_version string, username string, password string) (*http.Cookie, string, error) {
-	url := fmt.Sprintf("https://%s/rest/%s/login?username=%s&password=%s", ip, rest_version, username, password)
-	req, _ := http.NewRequest("POST", url, nil)
+	// The credentials go in the body, never the URL: the switch logs the URLs
+	// it is asked for in cleartext.
+	login_url := fmt.Sprintf("https://%s/rest/%s/login", ip, rest_version)
+	form := url.Values{"username": {username}, "password": {password}}
+	req, _ := http.NewRequest("POST", login_url, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("accept", "*/*")
 	req.Header.Set("x-use-csrf-token", "true")
 	req.Close = false
