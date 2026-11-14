@@ -31,9 +31,9 @@ func Connect(c *Client) (*Client, error) {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: !c.VerifyCertificate},
 	}
 
-	if c.Version == "" || (c.Version != "v10.09" && c.Version == "v10.10") {
-		c.Version = "v10.09"
-	}
+	// Always REST v10.16, the switch firmware's own: on it, v10.09 leaves out
+	// attributes and map keys.
+	c.Version = "v10.16"
 
 	if c.Transport == nil {
 		c.Transport = tr
