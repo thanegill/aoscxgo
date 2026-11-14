@@ -165,7 +165,7 @@ func (v *Vlan) Get(c *Client) error {
 			v.Description = value.(string)
 		}
 
-		if key == "admin" {
+		if key == "admin" && value != nil {
 			v.AdminState = value.(string)
 		}
 

@@ -22,308 +22,125 @@ type L2Interface struct {
 	materialized     bool                   `json:"materialized"`
 }
 
-// Create performs PATCH to update L2Interface configuration on the given Client object.
+// Create sets the port's VLANs exactly as Update does, since a physical port
+// always exists; a name that is no port fails its PATCH.
 func (i *L2Interface) Create(c *Client) error {
-	base_uri := "system/interfaces"
+	return i.Update(c)
+}
+
+// Update PATCHes vlan_mode, vlan_tag and vlan_trunks in one request, and no
+// other attribute: user_config holds the port's MTU and admin state, and a
+// PUT would replace every writable attribute. Every VLAN it names must
+// already exist, since the switch would drop a missing one from vlan_trunks
+// and an empty vlan_trunks allows every VLAN.
+func (i *L2Interface) Update(c *Client) error {
+	if !checkName(i.Interface.Name) {
+		return &RequestError{
+			StatusCode: "Invalid Required Value: Name",
+			Err:        errors.New("Update Error"),
+		}
+	}
 
 	patchMap := map[string]interface{}{}
 
-	if i.Interface.Name == "" {
-		return &RequestError{
-			StatusCode: "Missing Interface unable to configure L2Interface",
-			Err:        errors.New("Create Error"),
+	switch i.VlanMode {
+	case "access":
+		tag, err := vlanReferences(c, []interface{}{i.VlanTag})
+		if err != nil {
+			return err
 		}
-	}
-
-	err := i.Interface.checkValues()
-	if err != nil {
-		return err
-
-	}
-
-	int_str := url.PathEscape(i.Interface.Name)
-	url := "https://" + c.Hostname + "/rest/" + c.Version + "/" + base_uri + "/" + int_str
-
-	if i.VlanMode == "access" || i.VlanMode == "" {
-		if i.VlanTag == 0 {
-			i.VlanTag = 1
-		}
-
-		tmp_vlan := Vlan{
-			VlanId: i.VlanTag,
-		}
-
-		err := tmp_vlan.Get(c)
-
-		if err != nil && !tmp_vlan.materialized {
-			err = tmp_vlan.Create(c)
-			if err != nil && !tmp_vlan.materialized {
-				return &RequestError{
-					StatusCode: "Vlan Not found unable to configure L2Interface",
-					Err:        errors.New("Create Error"),
-				}
-			}
-		}
-		patchMap["vlan_tag"] = map[string]interface{}{strconv.Itoa(i.VlanTag): tmp_vlan.GetURI()}
 		patchMap["vlan_mode"] = "access"
-
-	} else if i.VlanMode == "trunk" || i.VlanMode == "native-untagged" || i.VlanMode == "native-tagged" {
-
-		if i.NativeVlanTag {
-			i.VlanMode = "native-tagged"
-		} else {
-			i.VlanMode = "native-untagged"
-		}
-
-		if i.VlanTag == 1 {
-			patchMap["vlan_tag"] = nil
-		} else {
-			tmp_vlan := Vlan{
-				VlanId: i.VlanTag,
-			}
-
-			err := tmp_vlan.Get(c)
-
-			if err != nil && !tmp_vlan.materialized {
-				return &RequestError{
-					StatusCode: "Vlan Not found unable to configure L2Interface",
-					Err:        errors.New("Create Error"),
-				}
-			}
-			patchMap["vlan_tag"] = map[string]interface{}{
-				strconv.Itoa(tmp_vlan.VlanId): tmp_vlan.GetURI(),
-			}
-		}
-
-		vlan_trunks := map[string]interface{}{}
-
-		if !i.TrunkAllowedAll {
-			// Test what is behavior of List being empty or not
-			for _, item := range i.VlanIds {
-				tmp_vlan_obj := Vlan{VlanId: item.(int)}
-				err = tmp_vlan_obj.Get(c)
-				if err == nil {
-					vlan_trunks[strconv.Itoa(tmp_vlan_obj.VlanId)] = tmp_vlan_obj.GetURI()
-				}
-
-			}
-
-		} else {
-			vlan_trunks = map[string]interface{}{}
-		}
-		patchMap["vlan_trunks"] = vlan_trunks
-		patchMap["vlan_mode"] = i.VlanMode
-	} else {
-		status_str := "Invalid Required Value: VlanMode - valid options are 'access' or 'trunk' received: " + i.VlanMode
-		return &RequestError{
-			StatusCode: status_str,
-			Err:        errors.New("Create Error"),
-		}
-	}
-
-	// Make sure Interface exists in table before patching L2 attributes
-	tmp_int := Interface{
-		Name: i.Interface.Name,
-	}
-
-	err = tmp_int.Get(c)
-
-	if err != nil {
-		return err
-
-	} else if !tmp_int.materialized {
-		err = i.Interface.Create(c)
-
-		if err != nil {
-			return err
-
-		}
-	}
-
-	patchMap["description"] = i.Description
-	patchMap["admin"] = i.Interface.AdminState
-	patchMap["routing"] = false
-
-	if i.Interface.AdminState == "down" {
-		patchMap["user_config"] = map[string]interface{}{
-			"admin": "down"}
-	} else if i.Interface.AdminState == "up" {
-		patchMap["user_config"] = map[string]interface{}{
-			"admin": "up"}
-	}
-
-	patchBody, _ := json.Marshal(patchMap)
-
-	json_body := bytes.NewBuffer(patchBody)
-
-	res := patch(c, url, json_body)
-
-	if res.Status != "204 No Content" {
-		return &RequestError{
-			StatusCode: res.Status,
-			Err:        errors.New("Create Error"),
-		}
-	}
-
-	i.materialized = true
-
-	return nil
-}
-
-// Update performs PATCH or PUT to update L2Interface configuration on the given Client object.
-func (i *L2Interface) Update(c *Client, use_put bool) error {
-	base_uri := "system/interfaces"
-
-	updateMap := map[string]interface{}{}
-
-	if use_put {
-		tmp_l2_int := L2Interface{Interface: i.Interface}
-		err := tmp_l2_int.Get(c)
+		patchMap["vlan_tag"] = tag
+		patchMap["vlan_trunks"] = map[string]interface{}{}
+	case "trunk":
+		tag, err := vlanReferences(c, []interface{}{i.VlanTag})
 		if err != nil {
 			return err
 		}
-
-		for key, value := range tmp_l2_int.InterfaceDetails {
-			updateMap[key] = value
-		}
-	}
-
-	if i.Interface.Name == "" {
-		return &RequestError{
-			StatusCode: "Missing Interface unable to configure L2Interface",
-			Err:        errors.New("Update Error"),
-		}
-	}
-
-	err := i.Interface.checkValues()
-	if err != nil {
-		return err
-
-	}
-
-	int_str := url.PathEscape(i.Interface.Name)
-
-	url := "https://" + c.Hostname + "/rest/" + c.Version + "/" + base_uri + "/" + int_str
-
-	if i.VlanMode == "access" || i.VlanMode == "" {
-		if i.VlanTag == 0 {
-			i.VlanTag = 1
-		}
-
-		tmp_vlan := Vlan{
-			VlanId: i.VlanTag,
-		}
-
-		err := tmp_vlan.Get(c)
-
-		if err != nil && !tmp_vlan.materialized {
-			err_str := "Vlan Not found unable to configure L2Interface Stats " + err.(*RequestError).StatusCode + " | " + strconv.FormatBool(tmp_vlan.materialized)
+		trunks := map[string]interface{}{}
+		if i.TrunkAllowedAll && len(i.VlanIds) != 0 {
 			return &RequestError{
-				StatusCode: err_str,
+				StatusCode: "a trunk sets trunk_allowed_all or lists vlan_ids, not both",
 				Err:        errors.New("Update Error"),
 			}
 		}
-		updateMap["vlan_tag"] = map[string]interface{}{strconv.Itoa(i.VlanTag): tmp_vlan.GetURI()}
-		updateMap["vlan_mode"] = "access"
-
-	} else if i.VlanMode == "trunk" || i.VlanMode == "native-untagged" || i.VlanMode == "native-tagged" {
-
-		if i.NativeVlanTag {
-			i.VlanMode = "native-tagged"
-		} else {
-			i.VlanMode = "native-untagged"
-		}
-
-		if i.VlanTag == 1 || i.VlanTag == 0 {
-			updateMap["vlan_tag"] = nil
-		} else {
-			tmp_vlan := Vlan{
-				VlanId: i.VlanTag,
-			}
-
-			err := tmp_vlan.Get(c)
-
-			if err != nil && !tmp_vlan.materialized {
-				err_str := "Vlan Not found unable to configure L2Interface Stats " + err.(*RequestError).StatusCode + " | " + strconv.Itoa(i.VlanTag)
+		if !i.TrunkAllowedAll {
+			if len(i.VlanIds) == 0 {
 				return &RequestError{
-					StatusCode: err_str,
+					StatusCode: "a trunk lists its allowed VLANs in vlan_ids, or sets trunk_allowed_all",
 					Err:        errors.New("Update Error"),
 				}
 			}
-			updateMap["vlan_tag"] = map[string]interface{}{
-				strconv.Itoa(tmp_vlan.VlanId): tmp_vlan.GetURI(),
-			}
-		}
-
-		vlan_trunks := map[string]interface{}{}
-
-		if !i.TrunkAllowedAll {
-			// Test what is behavior of List being empty or not
-			for _, item := range i.VlanIds {
-				tmp_vlan_obj := Vlan{VlanId: item.(int)}
-				err = tmp_vlan_obj.Get(c)
-				if err == nil {
-					vlan_trunks[strconv.Itoa(tmp_vlan_obj.VlanId)] = tmp_vlan_obj.GetURI()
+			// The switch forwards the native VLAN only when it is allowed too.
+			if !containsVlan(i.VlanIds, i.VlanTag) {
+				return &RequestError{
+					StatusCode: "the native VLAN " + strconv.Itoa(i.VlanTag) + " is not among the trunk's allowed VLANs",
+					Err:        errors.New("Update Error"),
 				}
-
 			}
-		} else {
-			vlan_trunks = map[string]interface{}{}
+			trunks, err = vlanReferences(c, i.VlanIds)
+			if err != nil {
+				return err
+			}
 		}
-		updateMap["vlan_trunks"] = vlan_trunks
-		updateMap["vlan_mode"] = i.VlanMode
-
-	} else {
-		status_str := "Invalid Required Value: VlanMode - valid options are 'access' or 'trunk' received: " + i.VlanMode
+		if i.NativeVlanTag {
+			patchMap["vlan_mode"] = "native-tagged"
+		} else {
+			patchMap["vlan_mode"] = "native-untagged"
+		}
+		patchMap["vlan_tag"] = tag
+		patchMap["vlan_trunks"] = trunks
+	default:
 		return &RequestError{
-			StatusCode: status_str,
+			StatusCode: "Invalid Required Value: VlanMode - valid options are 'access' or 'trunk' received: " + i.VlanMode,
 			Err:        errors.New("Update Error"),
 		}
 	}
 
-	updateMap["description"] = i.Description
-	updateMap["admin"] = i.Interface.AdminState
-	updateMap["routing"] = false
-
-	if i.Interface.AdminState == "down" {
-		updateMap["user_config"] = map[string]interface{}{
-			"admin": "down"}
-	}
-	if i.Interface.AdminState == "up" {
-		updateMap["user_config"] = map[string]interface{}{
-			"admin": "up"}
-	}
-
-	updateBody, _ := json.Marshal(updateMap)
-
-	json_body := bytes.NewBuffer(updateBody)
-
-	if use_put {
-		res := put(c, url, json_body)
-		if res.Status != "200 OK" {
-			status_str := string(updateBody) + "PUT status code = " + res.Status
-			return &RequestError{
-				//StatusCode: res.Status,
-				StatusCode: status_str,
-				Err:        errors.New("Update Error"),
-			}
-		}
-
-	} else {
-		res := patch(c, url, json_body)
-		if res.Status != "204 No Content" {
-			status_str := string(updateBody) + "PATCH status code = " + res.Status
-			return &RequestError{
-				//StatusCode: res.Status,
-				StatusCode: status_str,
-				Err:        errors.New("Update Error"),
-			}
+	patchBody, _ := json.Marshal(patchMap)
+	address := "https://" + c.Hostname + "/rest/" + c.Version + "/system/interfaces/" + url.PathEscape(i.Interface.Name)
+	res := patch(c, address, bytes.NewBuffer(patchBody))
+	if res.Status != "204 No Content" {
+		return &RequestError{
+			StatusCode: string(patchBody) + " PATCH status code = " + res.Status,
+			Err:        errors.New("Update Error"),
 		}
 	}
 
 	i.materialized = true
-
 	return nil
+}
+
+// vlanReferences maps each VLAN id to its URI, as vlan_tag and vlan_trunks
+// name them, failing on any VLAN the switch does not have.
+func vlanReferences(c *Client, ids []interface{}) (map[string]interface{}, error) {
+	references := map[string]interface{}{}
+	for _, id := range ids {
+		vlan := Vlan{VlanId: id.(int)}
+		if vlan.VlanId < 1 || vlan.VlanId > 4094 {
+			return nil, &RequestError{
+				StatusCode: "VLAN " + strconv.Itoa(vlan.VlanId) + " is not a VLAN id",
+				Err:        errors.New("Update Error"),
+			}
+		}
+		if err := vlan.Get(c); err != nil {
+			return nil, &RequestError{
+				StatusCode: "VLAN " + strconv.Itoa(vlan.VlanId) + " could not be read from the switch: " + err.(*RequestError).StatusCode,
+				Err:        errors.New("Update Error"),
+			}
+		}
+		references[strconv.Itoa(vlan.VlanId)] = vlan.GetURI()
+	}
+	return references, nil
+}
+
+func containsVlan(ids []interface{}, id int) bool {
+	for _, item := range ids {
+		if item.(int) == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Delete performs PUT to remove/default L2Interface configuration from the given Client object.
@@ -406,36 +223,27 @@ func (i *L2Interface) Get(c *Client) error {
 			i.Interface.AdminState = value.(string)
 		}
 
-		if key == "vlan_tag" && value != nil {
+		if key == "vlan_tag" {
 			// convert json to value singular
 			// "vlan_tag": {
 			// 	"42": "/rest/v10.09/system/vlans/42"
 			//   },
-			for key, _ := range value.(map[string]interface{}) {
+			tags, _ := value.(map[string]interface{})
+			for key, _ := range tags {
 				vlan_int, _ := strconv.Atoi(key)
 				i.VlanTag = vlan_int
 			}
 
 		}
 
-		if key == "vlan_trunks" && len(value.(map[string]interface{})) != 0 {
-			// convert json to value singular
-			// "vlan_trunks": {
-			// 	"42": "/rest/v10.09/system/vlans/42"
-			//   },
-			tmp_splice := []interface{}{}
-			for key, _ := range value.(map[string]interface{}) {
-				vlan_int, _ := strconv.Atoi(key)
-				tmp_splice = append(tmp_splice, vlan_int)
-
-			}
-
-			i.VlanIds = tmp_splice
-			i.TrunkAllowedAll = false
-
-		} else if key == "vlan_trunks" && len(value.(map[string]interface{})) == 0 {
-			i.TrunkAllowedAll = true
+		if key == "vlan_trunks" {
+			trunks, _ := value.(map[string]interface{})
 			i.VlanIds = []interface{}{}
+			for key, _ := range trunks {
+				vlan_int, _ := strconv.Atoi(key)
+				i.VlanIds = append(i.VlanIds, vlan_int)
+			}
+			i.TrunkAllowedAll = len(trunks) == 0
 		}
 
 	}
