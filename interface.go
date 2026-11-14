@@ -51,60 +51,23 @@ func (i *Interface) checkValues() error {
 	return nil
 }
 
-// Create performs POST to create Interface configuration on the given Client object.
+// Create never POSTs. Every name checkValues accepts is a physical port,
+// which always exists, so the caller falls back to Get and Update.
 func (i *Interface) Create(c *Client) error {
-	base_uri := "system/interfaces"
-	url_str := "https://" + c.Hostname + "/rest/" + c.Version + "/" + base_uri
-
-	int_str := url.PathEscape(i.Name)
-
-	i.uri = "/rest/" + c.Version + "/" + base_uri + "/" + int_str
-
-	err := i.checkValues()
-	if err != nil {
-		return err
-
-	}
-
-	postMap := map[string]interface{}{
-		"name":        i.Name,
-		"description": i.Description,
-		"admin":       i.AdminState,
-	}
-
-	if i.AdminState == "down" {
-		postMap["user_config"] = map[string]interface{}{
-			"admin": "down"}
-	} else if i.AdminState == "up" {
-		postMap["user_config"] = map[string]interface{}{
-			"admin": "up"}
-	}
-
-	postBody, _ := json.Marshal(postMap)
-
-	json_body := bytes.NewBuffer(postBody)
-
-	res := post(c, url_str, json_body)
-
-	if res.Status != "201 Created" {
-		return &RequestError{
-			StatusCode: res.Status,
-			Err:        errors.New("Create Error"),
-		}
-	}
-
-	i.materialized = true
-
-	return nil
+	return i.checkValues()
 }
 
-// Update performs PATCH to update Interface configuration on the given Client object.
+// Update PATCHes the description and nothing else. user_config holds the
+// port's admin state, mtu, speeds and autoneg, and the switch may replace
+// that map whole; the top-level admin can read back null, so sending either
+// could reset the port or bring it up.
 func (i *Interface) Update(c *Client) error {
 	base_uri := "system/interfaces"
-	err := i.checkValues()
-	if err != nil {
-		return err
-
+	if !checkName(i.Name) {
+		return &RequestError{
+			StatusCode: "Invalid Required Value: Name",
+			Err:        errors.New("Update Error"),
+		}
 	}
 
 	int_str := url.PathEscape(i.Name)
@@ -113,16 +76,6 @@ func (i *Interface) Update(c *Client) error {
 
 	patchMap := map[string]interface{}{
 		"description": i.Description,
-		"admin":       i.AdminState,
-	}
-
-	if i.AdminState == "down" {
-		patchMap["user_config"] = map[string]interface{}{
-			"admin": "down"}
-	}
-	if i.AdminState == "up" {
-		patchMap["user_config"] = map[string]interface{}{
-			"admin": "up"}
 	}
 
 	patchBody, _ := json.Marshal(patchMap)
