@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 )
 
@@ -20,6 +19,23 @@ func (r *RequestError) Error() string {
 	return fmt.Sprintf("Status : %v\nError %v", r.StatusCode, r.Err)
 }
 
+// roundTrip sends req. When no response comes back, as on a refused or
+// dropped connection or a timeout, it returns the error together with a
+// response that has no status code, an empty body and the error as its
+// Status, so a caller that checks only the status fails with the error's
+// message instead of dereferencing a nil response.
+func roundTrip(transport *http.Transport, req *http.Request) (*http.Response, error) {
+	res, err := transport.RoundTrip(req)
+	if err != nil {
+		return &http.Response{
+			Status: fmt.Sprintf("no response to %s %s: %v", req.Method, req.URL.Redacted(), err),
+			Header: http.Header{},
+			Body:   http.NoBody,
+		}, err
+	}
+	return res, nil
+}
+
 // delete performs DELETE to the given URL and returns the response.
 func delete(client *Client, url string) *http.Response {
 	req, _ := http.NewRequest("DELETE", url, nil)
@@ -27,11 +43,7 @@ func delete(client *Client, url string) *http.Response {
 	req.Close = false
 
 	req.AddCookie(client.Cookie)
-	res, err := client.Transport.RoundTrip(req)
-	//Handle Error
-	if err != nil {
-		log.Fatalf("An Error Occured %v %v", err, res.Status)
-	}
+	res, _ := roundTrip(client.Transport, req)
 
 	return res
 }
@@ -44,13 +56,10 @@ func get(client *Client, url string) (*http.Response, map[string]interface{}) {
 	req.Header.Set("x-csrf-token", client.Csrf)
 	req.Close = false
 	req.AddCookie(client.Cookie)
-	res, err := client.Transport.RoundTrip(req)
-	if err != nil {
-		fmt.Println(err)
-	}
+	res, _ := roundTrip(client.Transport, req)
 
 	body := make(map[string]interface{})
-	err = json.NewDecoder(res.Body).Decode(&body)
+	json.NewDecoder(res.Body).Decode(&body)
 
 	return res, body
 }
@@ -63,12 +72,7 @@ func get_accept_text(client *Client, url string) (*http.Response, error) {
 	req.Header.Set("x-csrf-token", client.Csrf)
 	req.Close = false
 	req.AddCookie(client.Cookie)
-	res, err := client.Transport.RoundTrip(req)
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	return res, err
+	return roundTrip(client.Transport, req)
 }
 
 // get performs GET to the given URL and returns the data response.
@@ -79,11 +83,7 @@ func post(client *Client, url string, json_body *bytes.Buffer) *http.Response {
 	req.Close = false
 
 	req.AddCookie(client.Cookie)
-	res, err := client.Transport.RoundTrip(req)
-	//Handle Error
-	if err != nil {
-		log.Fatalf("An Error Occured %v %v", err, res.Status)
-	}
+	res, _ := roundTrip(client.Transport, req)
 
 	return res
 }
@@ -96,11 +96,7 @@ func put(client *Client, url string, json_body *bytes.Buffer) *http.Response {
 	req.Close = false
 
 	req.AddCookie(client.Cookie)
-	res, err := client.Transport.RoundTrip(req)
-	//Handle Error
-	if err != nil {
-		log.Fatalf("An Error Occured %v %v", err, res.Status)
-	}
+	res, _ := roundTrip(client.Transport, req)
 
 	return res
 }
@@ -113,11 +109,7 @@ func patch(client *Client, url string, json_body *bytes.Buffer) *http.Response {
 	req.Close = false
 
 	req.AddCookie(client.Cookie)
-	res, err := client.Transport.RoundTrip(req)
-	//Handle Error
-	if err != nil {
-		log.Fatalf("An Error Occured %v %v", err, res.Status)
-	}
+	res, _ := roundTrip(client.Transport, req)
 
 	return res
 }

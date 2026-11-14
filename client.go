@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -76,18 +75,20 @@ func login(http_transport *http.Transport, ip string, rest_version string, usern
 	req.Header.Set("x-use-csrf-token", "true")
 	req.Close = false
 
-	res, err := http_transport.RoundTrip(req)
-	if res.Status != "200 OK" {
-		log.Fatalf("Got error while connecting to switch %s Error %s", res.Status, err)
-		return nil, "", err
+	res, _ := roundTrip(http_transport, req)
+	if res.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("could not log in to the switch: %s", res.Status)
+	}
+
+	csrf := res.Header.Get("X-Csrf-Token")
+	cookies := res.Cookies()
+	if csrf == "" || len(cookies) == 0 {
+		return nil, "", errors.New("could not log in to the switch: its login answered no session cookie or CSRF token")
 	}
 
 	fmt.Println("Login Successful")
 
-	csrf := res.Header["X-Csrf-Token"][0]
-	cookie := res.Cookies()[0]
-
-	return cookie, csrf, err
+	return cookies[0], csrf, nil
 }
 
 // logout performs POST to logout using a cookie from the given URL.
@@ -98,13 +99,10 @@ func logout(http_transport *http.Transport, cookie *http.Cookie, csrf string, ur
 	req.Close = false
 
 	req.AddCookie(cookie)
-	res, err := http_transport.RoundTrip(req)
-	//Handle Error
-	if res.Status != "200 OK" {
-		log.Fatalf("Got error while logging out of switch %s Error %s", res.Status, err)
+	res, _ := roundTrip(http_transport, req)
+	if res.StatusCode == http.StatusOK {
+		fmt.Println("Logout Successful")
 	}
-
-	fmt.Println("Logout Successful")
 
 	return res
 }
